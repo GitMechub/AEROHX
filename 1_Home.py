@@ -567,9 +567,15 @@ def hx_col(
                 axisEnd=(dist_curva / 2, 1, 0)     # variação apenas em Y
             )
         )
+
+        curva_col_2 = curva_col_.rotate((0, 0, 0), (0, 0, 1), math.degrees(theta_rad_curva)).translate((0, 0, L_curva_col)) if staggered else curva_col_.translate((0, 0, L_curva_col)) # Apenas para número de fileiras par
+
+        curva_col_cima2 = curva_col_cima + curva_col_2 + curva_col_cima.translate((pitch_h_, pitch_v_, 0)) # Apenas para número de fileiras par
+
         curva_col_ = curva_col_.rotate((0, 0, 0), (0, 0, 1), math.degrees(-theta_rad_curva)).translate((0, 0, L_curva_col)) if staggered else curva_col_.translate((0, 0, L_curva_col))
 
         curva_col_cima = curva_col_cima + curva_col_ + curva_col_cima.translate((pitch_h_, -pitch_v_, 0))
+
 
         ## Curva baixo
         curva_col_ = (
@@ -594,24 +600,41 @@ def hx_col(
 
     modelo_final2 = modelo_final
 
-    for i in range(num_cols - 1):
-        if i % 2 == 0:
-            ## Translação para o ramo com rotação
-            translacao_pipeline1 = cq.Vector(pitch_h_ * i, (pitch_v_ * (num_rows - 1)) * 2, 0)
+    if num_cols % 2 == 0: #*************
+      for i in range(num_cols - 1):
+          if i % 2 == 0:
+              ## Translação para o ramo com rotação
+              translacao_pipeline1 = cq.Vector(pitch_h_ * i, (pitch_v_ * (num_rows - 1)) * 2, 0)
 
-            ## Use o objeto já rotacionado e apenas aplique a translação diferente
-            pipeline1 = curva_col_baixo.translate(translacao_pipeline1)
+              ## Use o objeto já rotacionado e apenas aplique a translação diferente
+              pipeline1 = curva_col_baixo.translate(translacao_pipeline1)
 
-            modelo_final2 = modelo_final2 + pipeline1
+              modelo_final2 = modelo_final2 + pipeline1
 
-        else:
-            ## Translação para o ramo sem rotação
-            translacao_pipeline2 = cq.Vector(pitch_h_ * i, pitch_v_, length_)
+          else:
+              ## Translação para o ramo sem rotação
+              translacao_pipeline2 = cq.Vector(pitch_h_ * i, pitch_v_, length_)
 
-            pipeline2 = curva_col_cima.translate(translacao_pipeline2)
+              pipeline2 = curva_col_cima.translate(translacao_pipeline2)
 
-            modelo_final2 = modelo_final2 + pipeline2
+              modelo_final2 = modelo_final2 + pipeline2
 
+    else: # Caso "*"
+      for i in range(num_cols - 1):
+          if i % 2 == 0:
+              translacao_pipeline1 = cq.Vector(pitch_h_ * i, (pitch_v_ * (num_rows - 1)) * 2, length_)
+
+              pipeline1 = curva_col_cima2.translate(translacao_pipeline1)
+
+              modelo_final2 = modelo_final2 + pipeline1
+
+          else:
+              translacao_pipeline2 = cq.Vector(pitch_h_ * i, pitch_v_, length_)
+
+              pipeline2 = curva_col_cima.translate(translacao_pipeline2)
+
+              modelo_final2 = modelo_final2 + pipeline2
+              
     return modelo_final2
 
 
@@ -1376,3 +1399,4 @@ else:
   col2.markdown("")
 
   #https://aerohx-xbgevddyrwrida74b4hvnx.streamlit.app/
+
