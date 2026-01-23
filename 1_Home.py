@@ -41,9 +41,6 @@ from os.path import isfile, join
 
 import cv2  # OpenCV
 
-import streamlit_stl
-from streamlit_stl import stl_from_file
-
 import io
 import time
 
@@ -299,6 +296,43 @@ def plot_airfoils_alternados_plotly(contours):
 
     fig.update_yaxes(scaleanchor="x", scaleratio=1)  # Manter escala igual nos eixos
     # fig.show()
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def displayCAD_streamlit(file_path: str, title: str, opacity: float = 0.75,
+                         stl_tol: float = 0.1, stl_ang: float = 0.3):
+
+    ext = os.path.splitext(file_path)[1].lower()
+
+    # Se for STEP, converte pra STL primeiro
+    if ext in [".step", ".stp"]:
+        stl_path = file_path.rsplit(".", 1)[0] + "_view.stl"
+        shape = cq.importers.importStep(file_path)
+        exporters.export(shape, stl_path, tolerance=stl_tol, angularTolerance=stl_ang)
+        file_path = stl_path
+
+    # Visualiza malha (STL)
+    mesh = pv.read(file_path)
+
+    # pontos
+    x, y, z = mesh.points.T
+
+    faces = mesh.faces.reshape(-1, 4)[:, 1:]
+
+    fig = go.Figure(data=[go.Mesh3d(
+        x=x, y=y, z=z,
+        i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+        opacity=opacity
+    )])
+
+    fig.update_layout(
+        width=1200,
+        height=800,
+        scene=dict(aspectmode="data"),
+        title=title,
+        margin=dict(l=0, r=0, t=40, b=0)
+    )
+
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -693,7 +727,7 @@ def criar_header_hx(
             cq.Workplane("XY")
             .box(L_cab_b, H_cab_b, S_cab_b)
             #.edges("|Z").fillet(chord_ / 3)
-            .edges("|Z").fillet(3)
+            .edges("|Z").fillet(chord_/10)
         ).translate((pitch_h_ * (num_cols - 1) / 2, pitch_v_ * num_rows - espessura_h_, S_cab_b / 2))
 
         # Subtrai os perfis (furos) do cabeçote
@@ -715,8 +749,9 @@ def criar_header_hx(
             cq.Workplane("XY")
             .box(L_cab_b, H_cab_b, S_cab_b)
             #.edges("|Z").fillet(chord_ / 3)
-            .edges("|Z").fillet(3)
+            .edges("|Z").fillet(chord_/10)
         ).translate((pitch_h_ * (num_cols - 1) / 2, pitch_v_ * num_rows - espessura_h_, S_cab_b / 2))
+
 
     # Cria o corpo superior do cabeçote
     header_body = (
@@ -727,7 +762,7 @@ def criar_header_hx(
     ## Se offset_ for True, aplica shell interno antes do fillet
     #header_body = header_body.faces("+Z").shell(-espessura_offset * 2).edges("|Z").fillet(chord_ / 3) if offset_ else header_body.edges("|Z").fillet(chord_ / 3)
     header_body = header_body.faces("+Z").shell(-espessura_offset * 2).edges("|Z").fillet(
-        3) if offset_ else header_body.edges("|Z").fillet(3)
+        chord_/10) if offset_ else header_body.edges("|Z").fillet(chord_/10)
 
     ## Junta base inferior ao corpo do cabeçote
     header_body = header_body + cab_baixo
@@ -744,7 +779,7 @@ def criar_header_hx(
     ## Aplica shell se necessário
     #header_body2 = header_body2.faces("-Z").shell(-espessura_offset * 2).edges("|Z").fillet(chord_ / 3) if offset_ else header_body2.edges("|Z").fillet(chord_ / 3)
     header_body2 = header_body2.faces("-Z").shell(-espessura_offset * 2).edges("|Z").fillet(
-        3) if offset_ else header_body2.edges("|Z").fillet(3)
+        chord_/10) if offset_ else header_body2.edges("|Z").fillet(chord_/10)
 
     ## Junta base inferior
     header_body2 = header_body2 + cab_baixo
@@ -1089,8 +1124,7 @@ if st.session_state.extrude_button:
 
                 ################# RUNNING #################
 
-                coordinates = [(round(float(df__coord_input['x'][i]), 8), round(float(df__coord_input['y'][i]), 8)) for
-                               i in range(len(df__coord_input['x']))]
+                coordinates = [(float(df__coord_input['x'][i]), float(df__coord_input['y'][i])) for i in range(len(df__coord_input['x']))]
 
                 coordinates = centralizar_pontos_na_origem(coordinates)  # *
 
@@ -1104,16 +1138,19 @@ if st.session_state.extrude_button:
                                                                                           chord,
                                                                                           h_c, p_v_h, p_h_c)
 
-                contour_coordinates_ = contours
+
+                contour_coordinates_ = []
 
                 result = None
+                result_ = None
                 modelo_combinado = None
+                ajuste_espessura = False
 
                 sketch_list = []
-                sketch_offset_list = []  # internal
-                sketch_ext_list = []  # external
+                sketch_offset_list = []
+                sketch_ext_list = []
 
-                for contour in contour_coordinates_:
+                for contour in contours:
 
                     if contour is None:
                         continue
@@ -1122,50 +1159,68 @@ if st.session_state.extrude_button:
                     sketch1 = cq.Sketch()
 
                     try:
-                        for i in range(len(contour) - 1):
-                            sketch1 = sketch1.segment(contour[i], contour[i + 1])
 
-                        sketch1 = sketch1.close().assemble(
-                            tag="face").reset()  # * RESET Limpa o estado interno do esboço, mantendo apenas o resultado final (a face)
+                        sketch1 = sketch1.polygon(
+                            contour)  # if spline_mode is False else sketch1.face(cq.Workplane("XY").spline(contour, periodic=True).close().edges().vals())
 
-                        sketch_ext_list.append(sketch1)
+                        sketch1 = sketch1.reset()  # * RESET Limpa o estado interno do esboço, mantendo apenas o resultado final (a face)
 
-                        if offset_ is True:
-                            try:
-                                sketch1_offset = sketch1.copy().wires().offset(-(espessura_offset / scale),
-                                                                               mode='r').reset() if set_scale else sketch1.copy().wires().offset(
-                                    -(espessura_offset),
-                                    mode='r').reset()  # * * RESET Limpa o estado interno do esboço, mantendo apenas o resultado final (a face)
-                            except:
-                                sketch1_offset = sketch1.copy().wires().offset(-(espessura_h * 0.1),
-                                                                               mode='r').reset()  # * * RESET Limpa o estado interno do esboço, mantendo apenas o resultado final (a face)
-                                print(f'Espessura do perfil modificada para:{espessura_h * 0.1}')
+                        if set_scale:
+                            contour_coordinates_.append(
+                                [(v.X, v.Y) for v in sketch1.copy().wires().val().scale(scale).Vertices()])
+                        else:
+                            contour_coordinates_.append([(v.X, v.Y) for v in sketch1.copy().wires().val().Vertices()])  # Coordenadas ajustadas com escala
 
-                            sketch_offset_list.append(sketch1_offset)  # testing
-
-                        sketch_list.append(sketch1 - sketch1_offset if offset_ is True else sketch1)  # testing
+                        sketch_ext_list.append(sketch1.copy())  # external
 
                         try:
                             result = result + sketch1
-                            if offset_ is True:
-                                result_ = result_ + sketch1_offset  # *
                         except:
                             result = sketch1
-                            if offset_ is True:
-                                result_ = sketch1_offset  # *
+
+                        if offset_ is True:
+
+                            if set_scale is True and 2 * espessura_offset / scale > espessura_h:  # Detectar se foi necessário ajuste na espessura
+                                espessura_offset = espessura_h * scale / 2.5
+                                ajuste_espessura = True
+
+                            elif set_scale is False and 2 * espessura_offset > espessura_h:  # Detectar se foi necessário ajuste na espessura
+                                espessura_offset = espessura_h / 2.5
+                                ajuste_espessura = True
+
+                            sketch1_offset = sketch1.copy().wires().offset(-(espessura_offset / scale),
+                                                                           mode='r').reset() if set_scale else sketch1.copy().wires().offset(
+                                -(espessura_offset),
+                                mode='r').reset()  # * * RESET Limpa o estado interno do esboço, mantendo apenas o resultado final (a face)
+
+                            sketch_offset_list.append(sketch1_offset.copy())  # internal
+
+                            sketch_list.append(sketch1 - sketch1_offset)  # external - internal profile
+
+                            try:
+                                result_ = result_ + sketch1_offset
+                            except:
+                                result_ = sketch1_offset
+
+
+                        else:
+                            sketch_list.append(sketch1)  # external profile only
 
                     except:
-                        print("Error generating contour sketch")
+                        col2.error("Error generating contour sketch")
                         continue
 
                 if offset_ is True:
                     result = result - result_
+                    if ajuste_espessura is True:
+                        col2.error(f"Espessura ajustada para máximo = {espessura_offset}")
+
 
                 if set_scale is True:
                     try:
                         result = result.val().scale(scale)  # .translate(((-chord/2)*scale, 0, 0))
                     except:
-                        print("Error during scaling")
+                        col2.error("Error during scaling")
                         length = length / scale
                         # pass
 
@@ -1213,9 +1268,8 @@ if st.session_state.extrude_button:
                     if connectype == 'N/A':
                         exporters.export(tube_profile, 'hx_profile.step')
 
-
-                except:
-                    col2.error("Erro ao gerar modelo 3D.")
+                except Exception as e:
+                    col2.error(f"Erro ao gerar modelo 3D: {e}")
 
                 ################# CONEXÕES #################
 
@@ -1320,16 +1374,8 @@ if st.session_state.extrude_button:
                 my_bar.progress(90, text='Display')
 
                 try:
-                    stl_from_file(
-                        file_path='hx_final.stl',
-                        material='material',
-                        auto_rotate=False,
-                        opacity=1,
-                        cam_h_angle=90,
-                        height=610,
-                        max_view_distance=100000,
-                        color='#4169E1'
-                    )
+                    displayCAD_streamlit('hx_final.step', f"Visualização: hx_final.step")
+
                     st.success("Modelo gerado com sucesso.")
                     st.session_state.st_sketch = result
                     st.session_state.st_solid = modelo_final2
@@ -1433,5 +1479,4 @@ else:
     col2.markdown("")
 
     # https://aerohx-xbgevddyrwrida74b4hvnx.streamlit.app/
-
 
